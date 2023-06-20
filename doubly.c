@@ -43,7 +43,7 @@ NODE deleterear(NODE first)
 {
     NODE cur=NULL;
     NODE prev=NULL;
-    if(cur==NULL)
+    if(first==NULL)
     {
       printf("List is empty\n");
       return NULL;
