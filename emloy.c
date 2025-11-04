@@ -1,46 +1,37 @@
-package com.example.jwtauth.service;
+package com.example.jwtauth.security;
 
-import com.example.jwtauth.dto.*;
-import com.example.jwtauth.model.*;
-import com.example.jwtauth.repo.UserRepository;
-import com.example.jwtauth.security.JwtUtil;
-import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.stereotype.Service;
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.web.filter.OncePerRequestFilter;
 
-@Service
-public class AuthService {
-    private final UserRepository repo;
-    private final PasswordEncoder encoder;
+import java.io.IOException;
+import java.util.List;
+
+public class JwtFilter extends OncePerRequestFilter {
     private final JwtUtil jwtUtil;
 
-    public AuthService(UserRepository repo, PasswordEncoder encoder, JwtUtil jwtUtil) {
-        this.repo = repo;
-        this.encoder = encoder;
-        this.jwtUtil = jwtUtil;
-    }
+    public JwtFilter(JwtUtil jwtUtil) { this.jwtUtil = jwtUtil; }
 
-    public AuthResponse register(RegisterRequest req) {
-        if (repo.findByEmail(req.getEmail()).isPresent()) {
-            throw new RuntimeException("Email already registered");
+    @Override
+    protected void doFilterInternal(HttpServletRequest request,
+                                    HttpServletResponse response,
+                                    FilterChain filterChain) throws ServletException, IOException {
+        String header = request.getHeader("Authorization");
+        if (header != null && header.startsWith("Bearer ")) {
+            String token = header.substring(7);
+            if (jwtUtil.isTokenValid(token)) {
+                String email = jwtUtil.extractEmail(token);
+                String role = jwtUtil.extractRole(token);
+                var auth = new UsernamePasswordAuthenticationToken(email, null,
+                        List.of(new SimpleGrantedAuthority(role)));
+                SecurityContextHolder.getContext().setAuthentication(auth);
+            }
         }
-        User user = new User();
-        user.setName(req.getName());
-        user.setEmail(req.getEmail());
-        user.setPassword(encoder.encode(req.getPassword()));
-        user.setRole(Role.valueOf(req.getRole()));
-        repo.save(user);
-
-        String token = jwtUtil.generateToken(user.getEmail(), user.getRole().name());
-        return new AuthResponse(token, user.getEmail(), user.getRole().name());
-    }
-
-    public AuthResponse login(LoginRequest req) {
-        User user = repo.findByEmail(req.getEmail())
-                .orElseThrow(() -> new RuntimeException("User not found"));
-        if (!encoder.matches(req.getPassword(), user.getPassword())) {
-            throw new RuntimeException("Invalid credentials");
-        }
-        String token = jwtUtil.generateToken(user.getEmail(), user.getRole().name());
-        return new AuthResponse(token, user.getEmail(), user.getRole().name());
+        filterChain.doFilter(request, response);
     }
 }
