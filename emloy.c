@@ -1,30 +1,60 @@
-package com.example.auth.controller;
+package com.example.auth.security;
 
-import org.springframework.security.core.Authentication;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
+import org.springframework.security.authentication.*;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.crypto.bcrypt.*;
+import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
-@RestController
-@RequestMapping("/api")
-public class SampleController {
+@Configuration
+@EnableMethodSecurity
+public class SecurityConfig {
 
-    @GetMapping("/public/hello")
-    public String publicHello() {
-        return "Hello public!";
+    private final JwtUtil jwtUtil;
+    private final CustomUserDetailsService userDetailsService;
+
+    public SecurityConfig(JwtUtil jwtUtil, CustomUserDetailsService userDetailsService) {
+        this.jwtUtil = jwtUtil;
+        this.userDetailsService = userDetailsService;
     }
 
-    @GetMapping("/user/me")
-    public String userInfo(Authentication auth) {
-        // principal is userId (string) because filter sets it that way
-        return "Authenticated user id: " + auth.getPrincipal() + ", authorities: " + auth.getAuthorities();
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+
+        JwtAuthenticationFilter jwtFilter = new JwtAuthenticationFilter(jwtUtil, userDetailsService);
+
+        http
+            .csrf(csrf -> csrf.disable())
+            .sessionManagement(sess -> sess.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .authorizeHttpRequests(auth -> auth
+                    .requestMatchers("/api/auth/**", "/h2-console/**").permitAll()
+                    .requestMatchers(HttpMethod.GET, "/api/public/**").permitAll()
+                    .requestMatchers("/api/provider/**").hasAuthority("ROLE_PROVIDER")
+                    .requestMatchers("/api/admin/**").hasAuthority("ROLE_ADMIN")
+                    .anyRequest().authenticated()
+            )
+            // allow h2 console frames
+            .headers(headers -> headers.frameOptions(frame -> frame.sameOrigin()))
+            .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);
+
+        return http.build();
     }
 
-    @GetMapping("/api/provider/hello")
-    public String providerHello() {
-        return "Hello provider (ROLE_PROVIDER required)";
+    @Bean
+    public AuthenticationManager authenticationManager() {
+        return new ProviderManager(new DaoAuthenticationProvider() {{
+            setUserDetailsService(userDetailsService);
+            setPasswordEncoder(passwordEncoder());
+        }});
     }
 
-    @GetMapping("/api/admin/hello")
-    public String adminHello() {
-        return "Hello admin (ROLE_ADMIN required)";
+    @Bean
+    public BCryptPasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder();
     }
 }
