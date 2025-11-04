@@ -1,60 +1,65 @@
 package com.example.auth.security;
 
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
-import org.springframework.http.HttpMethod;
-import org.springframework.security.authentication.*;
-import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
-import org.springframework.security.config.annotation.web.builders.HttpSecurity;
-import org.springframework.security.config.http.SessionCreationPolicy;
-import org.springframework.security.crypto.bcrypt.*;
-import org.springframework.security.web.SecurityFilterChain;
-import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.Jws;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
+import org.springframework.util.StringUtils;
+import org.springframework.web.filter.OncePerRequestFilter;
 
-@Configuration
-@EnableMethodSecurity
-public class SecurityConfig {
+import java.io.IOException;
+import java.util.List;
+
+public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtUtil jwtUtil;
     private final CustomUserDetailsService userDetailsService;
 
-    public SecurityConfig(JwtUtil jwtUtil, CustomUserDetailsService userDetailsService) {
+    public JwtAuthenticationFilter(JwtUtil jwtUtil, CustomUserDetailsService userDetailsService) {
         this.jwtUtil = jwtUtil;
         this.userDetailsService = userDetailsService;
     }
 
-    @Bean
-    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+    @Override
+    protected void doFilterInternal(HttpServletRequest request,
+                                    HttpServletResponse response,
+                                    FilterChain filterChain) throws ServletException, IOException {
 
-        JwtAuthenticationFilter jwtFilter = new JwtAuthenticationFilter(jwtUtil, userDetailsService);
+        try {
+            String jwt = parseJwt(request);
+            if (jwt != null && jwtUtil.validateToken(jwt)) {
+                Jws<Claims> claimsJws = jwtUtil.getClaims(jwt);
+                String userId = claimsJws.getBody().getSubject();
+                String role = claimsJws.getBody().get("role", String.class);
 
-        http
-            .csrf(csrf -> csrf.disable())
-            .sessionManagement(sess -> sess.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-            .authorizeHttpRequests(auth -> auth
-                    .requestMatchers("/api/auth/**", "/h2-console/**").permitAll()
-                    .requestMatchers(HttpMethod.GET, "/api/public/**").permitAll()
-                    .requestMatchers("/api/provider/**").hasAuthority("ROLE_PROVIDER")
-                    .requestMatchers("/api/admin/**").hasAuthority("ROLE_ADMIN")
-                    .anyRequest().authenticated()
-            )
-            // allow h2 console frames
-            .headers(headers -> headers.frameOptions(frame -> frame.sameOrigin()))
-            .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);
+                // load user (by email or id) — our UserDetailsService loads by email.
+                // For efficiency you might store email in token, but here we'll map id->email via repository.
+                // We'll use UserDetailsService only for authorities & checks using email from DB.
+                // Alternative: create Authentication directly using claims (we do that).
+                var authorities = List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority(role));
+                UsernamePasswordAuthenticationToken auth =
+                        new UsernamePasswordAuthenticationToken(userId, null, authorities);
+                auth.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+                SecurityContextHolder.getContext().setAuthentication(auth);
+            }
+        } catch (Exception ex) {
+            // if token invalid, just don't set authentication
+            logger.warn("JWT processing failed: " + ex.getMessage());
+        }
 
-        return http.build();
+        filterChain.doFilter(request, response);
     }
 
-    @Bean
-    public AuthenticationManager authenticationManager() {
-        return new ProviderManager(new DaoAuthenticationProvider() {{
-            setUserDetailsService(userDetailsService);
-            setPasswordEncoder(passwordEncoder());
-        }});
-    }
-
-    @Bean
-    public BCryptPasswordEncoder passwordEncoder() {
-        return new BCryptPasswordEncoder();
+    private String parseJwt(HttpServletRequest request) {
+        String headerAuth = request.getHeader("Authorization");
+        if (StringUtils.hasText(headerAuth) && headerAuth.startsWith("Bearer ")) {
+            return headerAuth.substring(7);
+        }
+        return null;
     }
 }
