@@ -1,49 +1,37 @@
 package com.example.jwtauth.security;
 
-import io.jsonwebtoken.*;
-import io.jsonwebtoken.security.Keys;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Component;
-import java.security.Key;
-import java.util.Date;
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.web.filter.OncePerRequestFilter;
 
-@Component
-public class JwtUtil {
-    private final Key key;
-    private final long expiration;
+import java.io.IOException;
+import java.util.List;
 
-    public JwtUtil(@Value("${jwt.secret}") String secret,
-                   @Value("${jwt.expiration}") long expiration) {
-        this.key = Keys.hmacShaKeyFor(secret.getBytes());
-        this.expiration = expiration;
-    }
+public class JwtFilter extends OncePerRequestFilter {
+    private final JwtUtil jwtUtil;
 
-    public String generateToken(String email, String role) {
-        return Jwts.builder()
-                .setSubject(email)
-                .claim("role", role)
-                .setIssuedAt(new Date())
-                .setExpiration(new Date(System.currentTimeMillis() + expiration))
-                .signWith(key, SignatureAlgorithm.HS256)
-                .compact();
-    }
+    public JwtFilter(JwtUtil jwtUtil) { this.jwtUtil = jwtUtil; }
 
-    public String extractEmail(String token) {
-        return Jwts.parserBuilder().setSigningKey(key).build()
-                .parseClaimsJws(token).getBody().getSubject();
-    }
-
-    public String extractRole(String token) {
-        return (String) Jwts.parserBuilder().setSigningKey(key).build()
-                .parseClaimsJws(token).getBody().get("role");
-    }
-
-    public boolean isTokenValid(String token) {
-        try {
-            Jwts.parserBuilder().setSigningKey(key).build().parseClaimsJws(token);
-            return true;
-        } catch (JwtException e) {
-            return false;
+    @Override
+    protected void doFilterInternal(HttpServletRequest request,
+                                    HttpServletResponse response,
+                                    FilterChain filterChain) throws ServletException, IOException {
+        String header = request.getHeader("Authorization");
+        if (header != null && header.startsWith("Bearer ")) {
+            String token = header.substring(7);
+            if (jwtUtil.isTokenValid(token)) {
+                String email = jwtUtil.extractEmail(token);
+                String role = jwtUtil.extractRole(token);
+                var auth = new UsernamePasswordAuthenticationToken(email, null,
+                        List.of(new SimpleGrantedAuthority(role)));
+                SecurityContextHolder.getContext().setAuthentication(auth);
+            }
         }
+        filterChain.doFilter(request, response);
     }
 }
