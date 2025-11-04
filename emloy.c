@@ -1,37 +1,43 @@
-package com.example.jwtauth.security;
+package com.example.jwtauth.config;
 
-import jakarta.servlet.FilterChain;
-import jakarta.servlet.ServletException;
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
-import org.springframework.security.core.authority.SimpleGrantedAuthority;
-import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.web.filter.OncePerRequestFilter;
+import com.example.jwtauth.security.JwtFilter;
+import com.example.jwtauth.security.JwtUtil;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
-import java.io.IOException;
-import java.util.List;
+@Configuration
+public class SecurityConfig {
 
-public class JwtFilter extends OncePerRequestFilter {
     private final JwtUtil jwtUtil;
 
-    public JwtFilter(JwtUtil jwtUtil) { this.jwtUtil = jwtUtil; }
+    public SecurityConfig(JwtUtil jwtUtil) {
+        this.jwtUtil = jwtUtil;
+    }
 
-    @Override
-    protected void doFilterInternal(HttpServletRequest request,
-                                    HttpServletResponse response,
-                                    FilterChain filterChain) throws ServletException, IOException {
-        String header = request.getHeader("Authorization");
-        if (header != null && header.startsWith("Bearer ")) {
-            String token = header.substring(7);
-            if (jwtUtil.isTokenValid(token)) {
-                String email = jwtUtil.extractEmail(token);
-                String role = jwtUtil.extractRole(token);
-                var auth = new UsernamePasswordAuthenticationToken(email, null,
-                        List.of(new SimpleGrantedAuthority(role)));
-                SecurityContextHolder.getContext().setAuthentication(auth);
-            }
-        }
-        filterChain.doFilter(request, response);
+    @Bean
+    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+        http.csrf(csrf -> csrf.disable())
+            .sessionManagement(sess -> sess.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .authorizeHttpRequests(auth -> auth
+                    .requestMatchers("/auth/**", "/h2-console/**").permitAll()
+                    .requestMatchers("/admin/**").hasAuthority("ROLE_ADMIN")
+                    .requestMatchers("/provider/**").hasAuthority("ROLE_SERVICE_PROVIDER")
+                    .anyRequest().authenticated()
+            )
+            .headers(headers -> headers.frameOptions(frame -> frame.sameOrigin()))
+            .addFilterBefore(new JwtFilter(jwtUtil), UsernamePasswordAuthenticationFilter.class);
+
+        return http.build();
+    }
+
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder();
     }
 }
